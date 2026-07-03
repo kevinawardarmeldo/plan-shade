@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PlanMeasure — Area Takeoff Tool</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#1E242C;
+  --ink-2:#2A323C;
+  --ink-3:#39434F;
+  --paper:#F5F4F0;
+  --text-dim:#9AA7B4;
+  --text-lit:#EDF1F4;
+  --workspace:#4A525C;
+  --accent:#4FC6A4;
+  --accent-ink:#0B2B22;
+  --amber:#F2B33C;
+  --danger:#E5684F;
+  --radius:8px;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  --sans:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--sans);
+  background:var(--ink);
+  color:var(--text-lit);
+  overflow:hidden;
+  font-size:14px;
+}
+button{font-family:inherit;cursor:pointer}
+input,select{font-family:inherit}
+
+/* ---------- layout ---------- */
+#app{display:grid;grid-template-rows:56px 1fr 34px;grid-template-columns:56px 1fr 300px;height:100vh}
+header{grid-column:1/4;display:flex;align-items:center;gap:14px;padding:0 16px;background:var(--ink);border-bottom:1px solid var(--ink-3)}
+#toolbar{grid-row:2;grid-column:1;background:var(--ink);border-right:1px solid var(--ink-3);display:flex;flex-direction:column;align-items:center;padding-top:10px;gap:6px}
+#stage{grid-row:2;grid-column:2;position:relative;background:var(--workspace);overflow:hidden}
+#sidebar{grid-row:2;grid-column:3;background:var(--ink-2);border-left:1px solid var(--ink-3);overflow-y:auto;display:flex;flex-direction:column}
+#hud{grid-row:3;grid-column:1/4;background:var(--ink);border-top:1px solid var(--ink-3);display:flex;align-items:center;gap:24px;padding:0 16px;font-family:var(--mono);font-size:11.5px;color:var(--text-dim);white-space:nowrap;overflow:hidden}
+#hud b{color:var(--accent);font-weight:600}
+#hud .amberv{color:var(--amber)}
+#credit{color:var(--text-dim);flex:none}
+#credit a{color:var(--accent);text-decoration:none}
+#credit a:hover{text-decoration:underline}
+
+/* ---------- header ---------- */
+.logo{display:flex;align-items:baseline;gap:8px;margin-right:8px}
+.logo .mark{font-family:var(--mono);font-weight:600;font-size:15px;color:var(--accent);letter-spacing:-.5px}
+.logo .sub{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-dim)}
+.field{display:flex;flex-direction:column;gap:2px}
+.field label{font-size:9.5px;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-dim)}
+.field input{background:var(--ink-2);border:1px solid var(--ink-3);color:var(--text-lit);border-radius:6px;padding:5px 9px;font-size:13px;width:200px;outline:none}
+.field input:focus{border-color:var(--accent)}
+.spacer{flex:1}
+.btn{border:1px solid var(--ink-3);background:var(--ink-2);color:var(--text-lit);border-radius:var(--radius);padding:8px 14px;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:7px;transition:background .12s,border-color .12s}
+.btn:hover{background:var(--ink-3)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn svg{width:15px;height:15px}
+#pagenav{display:none;align-items:center;gap:6px;font-family:var(--mono);font-size:12px}
+#pagenav button{background:var(--ink-2);border:1px solid var(--ink-3);color:var(--text-lit);border-radius:6px;width:26px;height:26px}
+
+/* ---------- toolbar ---------- */
+.tool{width:40px;height:40px;border-radius:10px;border:1px solid transparent;background:transparent;color:var(--text-dim);display:flex;align-items:center;justify-content:center;position:relative;transition:all .12s}
+.tool:hover{background:var(--ink-2);color:var(--text-lit)}
+.tool.active{background:var(--accent);color:var(--accent-ink)}
+.tool svg{width:19px;height:19px}
+.tool .tip{position:absolute;left:50px;top:50%;transform:translateY(-50%);background:#0D1116;padding:5px 9px;border-radius:6px;font-size:11px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s;z-index:30;color:var(--text-lit)}
+.tool:hover .tip{opacity:1}
+.tb-sep{width:26px;height:1px;background:var(--ink-3);margin:5px 0}
+
+/* ---------- stage ---------- */
+#cv{position:absolute;inset:0;width:100%;height:100%;display:block}
+#dropzone{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;color:var(--text-dim);z-index:5}
+#dropzone .dz-box{border:2px dashed #6B7480;border-radius:16px;padding:56px 72px;text-align:center;background:rgba(30,36,44,.35);transition:border-color .15s,background .15s}
+#dropzone .dz-box.drag{border-color:var(--accent);background:rgba(79,198,164,.08)}
+#dropzone h2{font-size:19px;font-weight:700;color:var(--text-lit);margin-bottom:6px}
+#dropzone p{font-size:13px;margin-bottom:18px}
+#stage.tool-polygon #cv,#stage.tool-rect #cv,#stage.tool-scale #cv{cursor:crosshair}
+#stage.tool-pan #cv{cursor:grab}
+#stage.panning #cv{cursor:grabbing}
+
+/* ---------- sidebar ---------- */
+.panel{padding:14px 14px 10px;border-bottom:1px solid var(--ink-3)}
+.panel h3{font-size:10.5px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-dim);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between}
+.panel h3 .mini{font-size:10px;letter-spacing:0;text-transform:none;color:var(--accent);cursor:pointer;font-weight:600}
+.scale-status{font-family:var(--mono);font-size:12px;padding:9px 10px;border-radius:6px;background:var(--ink);border:1px dashed var(--ink-3);color:var(--text-dim)}
+.scale-status.set{border:1px solid var(--amber);color:var(--amber)}
+.group-item{background:var(--ink);border:1px solid var(--ink-3);border-radius:8px;padding:8px;margin-bottom:8px}
+.group-head{display:flex;align-items:center;gap:8px}
+.group-head input[type=color]{width:24px;height:24px;border:none;border-radius:6px;background:none;padding:0;cursor:pointer}
+.group-head input[type=color]::-webkit-color-swatch{border-radius:6px;border:1px solid rgba(255,255,255,.25)}
+.group-head input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+.group-head input[type=text]{flex:1;background:transparent;border:none;color:var(--text-lit);font-size:13px;font-weight:600;outline:none;min-width:0}
+.group-total{font-family:var(--mono);font-size:12px;color:var(--accent);white-space:nowrap}
+.group-del{background:none;border:none;color:var(--text-dim);font-size:15px;line-height:1;padding:2px}
+.group-del:hover{color:var(--danger)}
+.shape-item{display:flex;align-items:center;gap:7px;padding:7px 8px;border-radius:7px;margin-bottom:5px;background:var(--ink);border:1px solid var(--ink-3);cursor:pointer}
+.shape-item.sel{border-color:var(--accent)}
+.shape-dot{width:10px;height:10px;border-radius:3px;flex:none}
+.shape-name{flex:1;display:flex;align-items:baseline;gap:4px;min-width:0}
+.shape-name input{width:100%;min-width:0;background:transparent;border:none;border-bottom:1px dashed transparent;color:var(--text-lit);font-size:12.5px;font-family:inherit;outline:none;padding:0}
+.shape-name input:hover{border-bottom-color:var(--ink-3)}
+.shape-name input:focus{border-bottom-color:var(--accent)}
+.shape-page{font-size:11px;color:var(--text-dim);flex:none}
+.shape-area{font-family:var(--mono);font-size:11.5px;color:var(--text-dim)}
+.shape-item select{background:var(--ink-2);border:1px solid var(--ink-3);color:var(--text-lit);border-radius:5px;font-size:11px;padding:3px 4px;max-width:92px}
+.shape-del{background:none;border:none;color:var(--text-dim);font-size:14px}
+.shape-del:hover{color:var(--danger)}
+.empty-note{font-size:12px;color:var(--text-dim);padding:4px 2px 8px;line-height:1.5}
+
+/* ---------- modals ---------- */
+.overlay{position:fixed;inset:0;background:rgba(10,13,17,.62);display:none;align-items:center;justify-content:center;z-index:100}
+.overlay.open{display:flex}
+.modal{background:var(--ink-2);border:1px solid var(--ink-3);border-radius:14px;padding:22px;width:340px}
+.modal h4{font-size:15px;margin-bottom:6px}
+.modal p{font-size:12.5px;color:var(--text-dim);margin-bottom:14px;line-height:1.5}
+.modal input[type=number]{width:100%;background:var(--ink);border:1px solid var(--ink-3);color:var(--text-lit);border-radius:7px;padding:9px 11px;font-size:15px;font-family:var(--mono);outline:none;margin-bottom:14px}
+.modal input:focus{border-color:var(--accent)}
+.modal .row{display:flex;gap:8px;justify-content:flex-end}
+
+/* ---------- summary ---------- */
+#summaryWrap{position:fixed;inset:0;background:var(--workspace);z-index:90;display:none;overflow-y:auto}
+#summaryWrap.open{display:block}
+.sum-toolbar{position:sticky;top:0;background:var(--ink);padding:11px 20px;display:flex;gap:10px;align-items:center;z-index:5;border-bottom:1px solid var(--ink-3)}
+.sheet{background:#fff;color:#161A1E;max-width:860px;margin:26px auto;padding:46px 52px;border-radius:4px;box-shadow:0 14px 46px rgba(0,0,0,.4);font-family:var(--sans)}
+.sheet .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:2px;text-transform:uppercase;color:#7A8490;margin-bottom:8px}
+.sheet h1{font-size:27px;font-weight:800;letter-spacing:-.4px;margin-bottom:20px}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:26px;border-top:2px solid #161A1E;padding-top:14px}
+.meta-grid .m label{display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:1.4px;color:#7A8490;margin-bottom:3px}
+.meta-grid .m div{font-size:13.5px;font-weight:600}
+.sheet h2{font-size:12px;text-transform:uppercase;letter-spacing:1.6px;color:#7A8490;margin:26px 0 10px;font-weight:700}
+.snap{width:100%;border:1px solid #D8DCE0;border-radius:4px;margin-bottom:8px}
+.snap-cap{font-family:var(--mono);font-size:10.5px;color:#7A8490;margin-bottom:16px}
+table.sumtab{width:100%;border-collapse:collapse;font-size:13px}
+table.sumtab th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:1.3px;color:#7A8490;border-bottom:2px solid #161A1E;padding:7px 8px}
+table.sumtab th:last-child,table.sumtab td:last-child{text-align:right}
+table.sumtab td{padding:8px;border-bottom:1px solid #E4E7EA}
+table.sumtab td.num{font-family:var(--mono);font-weight:600}
+table.sumtab .swb{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:8px;vertical-align:-1px;border:1px solid rgba(0,0,0,.2)}
+table.sumtab tr.total td{border-top:2px solid #161A1E;border-bottom:none;font-weight:800;font-size:14px}
+.sheet footer{margin-top:34px;padding-top:12px;border-top:1px solid #E4E7EA;font-family:var(--mono);font-size:10px;color:#9AA3AD;display:flex;justify-content:space-between}
+
+@media print{
+  body{overflow:visible;background:#fff}
+  #app,.sum-toolbar{display:none!important}
+  #summaryWrap{position:static;background:#fff;overflow:visible}
+  .sheet{box-shadow:none;margin:0;max-width:none;border-radius:0;padding:10mm 6mm}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo"><span class="mark">PlanMeasure</span><span class="sub">Area takeoff</span></div>
+    <div class="field"><label>Project name</label><input id="projName" placeholder="e.g. Function Hall"></div>
+    <div class="field"><label>Calculated by</label><input id="calcBy" placeholder="Your name" style="width:150px"></div>
+    <div id="pagenav">
+      <button id="pgPrev">‹</button><span id="pgLabel">1/1</span><button id="pgNext">›</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn" id="btnFit" title="Fit drawing to screen">Fit view</button>
+    <button class="btn" id="btnOpen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4m0 0L7 9m5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+      Open plan</button>
+    <button class="btn primary" id="btnSummary">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>
+      Summary</button>
+    <input type="file" id="fileInput" accept="application/pdf,image/*" hidden>
+  </header>
+
+  <div id="toolbar">
+    <button class="tool active" data-tool="select" title="">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 8-6.5 1.5L9 19 5 3z"/></svg>
+      <span class="tip">Select / edit (V)</span></button>
+    <button class="tool" data-tool="pan">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18M12 3l-3 3m3-3 3 3M12 21l-3-3m3 3 3-3M3 12l3-3m-3 3 3 3M21 12l-3-3m3 3-3 3"/></svg>
+      <span class="tip">Pan (H, or hold Space)</span></button>
+    <div class="tb-sep"></div>
+    <button class="tool" data-tool="scale">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21 21 3M7 17l1.5 1.5M10 14l1.5 1.5M13 11l1.5 1.5M16 8l1.5 1.5"/></svg>
+      <span class="tip">Set scale — reference line (S)</span></button>
+    <div class="tb-sep"></div>
+    <button class="tool" data-tool="polygon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 6-3 10H7L4 9l8-6z"/><circle cx="12" cy="3" r="1.6" fill="currentColor"/><circle cx="20" cy="9" r="1.6" fill="currentColor"/><circle cx="4" cy="9" r="1.6" fill="currentColor"/></svg>
+      <span class="tip">Polygon area (P) — click points, Enter to close</span></button>
+    <button class="tool" data-tool="rect">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>
+      <span class="tip">Rectangle area (R) — click &amp; drag</span></button>
+  </div>
+
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="dropzone">
+      <div class="dz-box" id="dzBox">
+        <h2>Drop a floor plan here</h2>
+        <p>PDF or image (PNG · JPG). Then set the scale and start measuring.</p>
+        <button class="btn primary" id="btnOpen2">Choose file</button>
+        <p style="margin:16px 0 0;font-size:11px">Made by Kevin Award Armeldo · <a href="mailto:kevin.armeldo@gmail.com" style="color:var(--accent);text-decoration:none">kevin.armeldo@gmail.com</a><br>Found it useful? <a href="https://paypal.me/KevinAwardA" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">Leave a tip → paypal.me/KevinAwardA</a></p>
+      </div>
+    </div>
+  </div>
+
+  <div id="sidebar">
+    <div class="panel">
+      <h3>Scale calibration</h3>
+      <div class="scale-status" id="scaleStatus">Not set — pick the ruler tool, click two points of a known distance.</div>
+    </div>
+    <div class="panel">
+      <h3>Area groups <span class="mini" id="addGroup">+ Add group</span></h3>
+      <div id="groupList"></div>
+    </div>
+    <div class="panel" style="flex:1">
+      <h3>Shapes</h3>
+      <div id="shapeList"><div class="empty-note">No shapes yet. Use the polygon or rectangle tool to shade an area.</div></div>
+    </div>
+  </div>
+
+  <div id="hud">
+    <span>SCALE <b id="hudScale">—</b></span>
+    <span>CURSOR <b id="hudPos">—</b></span>
+    <span>ZOOM <b id="hudZoom">100%</b></span>
+    <span id="hudLive" class="amberv"></span>
+    <span class="spacer"></span>
+    <span id="hudHint">Open a plan to begin</span>
+    <span id="credit">by <a href="mailto:kevin.armeldo@gmail.com" title="kevin.armeldo@gmail.com">Kevin Award Armeldo</a> · <a href="https://paypal.me/KevinAwardA" target="_blank" rel="noopener">tip the maker ♥</a></span>
+  </div>
+</div>
+
+<!-- scale input modal -->
+<div class="overlay" id="scaleModal">
+  <div class="modal">
+    <h4>Reference distance</h4>
+    <p>You drew a line of <b id="scalePx" style="color:var(--amber)">0</b> px. Enter its real-world length to calibrate the drawing.</p>
+    <input type="number" id="scaleMeters" min="0.01" step="0.01" placeholder="Length in meters (m)">
+    <div class="row">
+      <button class="btn" id="scaleCancel">Cancel</button>
+      <button class="btn primary" id="scaleOk">Set scale</button>
+    </div>
+  </div>
+</div>
+
+<!-- summary view -->
+<div id="summaryWrap">
+  <div class="sum-toolbar">
+    <button class="btn" id="sumBack">‹ Back to editor</button>
+    <div class="spacer"></div>
+    <button class="btn primary" id="sumPrint">Print / Save as PDF</button>
+  </div>
+  <div class="sheet" id="sheet"></div>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+const $ = s => document.querySelector(s);
+const cv = $("#cv"), stage = $("#stage"), ctx = cv.getContext("2d");
+const PALETTE = ["#2A9D8F","#E76F51","#5A6ACF","#C74BA6","#8A9A2B","#3E8FD0","#D98E2B","#7B5CD6","#4C9A78","#B0563F"];
+
+const state = {
+  doc:null, page:1, numPages:1, pageCache:{},
+  view:{s:1,x:40,y:40},
+  tool:"select",
+  pxPerM:null, scaleLine:null,
+  groups:[{id:1,name:"Area 1",color:PALETTE[0]}],
+  shapes:[],
+  drawPts:[], rectStart:null, rectNow:null, scaleP1:null,
+  sel:null, dragV:null, dragShape:null,
+  panning:false, panStart:null, spaceDown:false,
+  mouseImg:null, mouseScr:null,
+  shapeSeq:1, groupSeq:2, lastGroup:1
+};
+
+/* ---------- helpers ---------- */
+const fmt2 = n => n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const hexRGBA = (hex,a)=>{const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;};
+const dist = (a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+function shoelace(pts){let s=0;for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];s+=a.x*b.y-b.x*a.y;}return Math.abs(s)/2;}
+function centroid(pts){let a=0,cx=0,cy=0;for(let i=0;i<pts.length;i++){const p=pts[i],q=pts[(i+1)%pts.length];const c=p.x*q.y-q.x*p.y;a+=c;cx+=(p.x+q.x)*c;cy+=(p.y+q.y)*c;}if(Math.abs(a)<1e-9){return pts.reduce((m,p)=>({x:m.x+p.x/pts.length,y:m.y+p.y/pts.length}),{x:0,y:0});}a*=.5;return{x:cx/(6*a),y:cy/(6*a)};}
+function inPoly(p,pts){let ins=false;for(let i=0,j=pts.length-1;i<pts.length;j=i++){if((pts[i].y>p.y)!==(pts[j].y>p.y)&&p.x<(pts[j].x-pts[i].x)*(p.y-pts[i].y)/(pts[j].y-pts[i].y)+pts[i].x)ins=!ins;}return ins;}
+const areaM2 = sh => state.pxPerM ? shoelace(sh.points)/(state.pxPerM**2) : null;
+const groupOf = id => state.groups.find(g=>g.id===id) || state.groups[0];
+
+/* ---------- canvas sizing ---------- */
+function resize(){
+  const r = stage.getBoundingClientRect(), dpr = devicePixelRatio||1;
+  cv.width = r.width*dpr; cv.height = r.height*dpr;
+  draw();
+}
+new ResizeObserver(resize).observe(stage);
+
+/* ---------- document loading ---------- */
+async function loadFile(file){
+  try{
+    if(file.type === "application/pdf"){
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({data:buf}).promise;
+      state.doc = {type:"pdf", pdf}; state.numPages = pdf.numPages;
+    } else if(file.type.startsWith("image/")){
+      const img = await new Promise((res,rej)=>{
+        const i = new Image();
+        i.onload = ()=>res(i); i.onerror = rej;
+        i.src = URL.createObjectURL(file);
+      });
+      state.doc = {type:"image", img}; state.numPages = 1;
+    } else { alert("Please choose a PDF or an image file."); return; }
+    state.page = 1; state.pageCache = {};
+    state.shapes = []; state.drawPts = []; state.sel = null;
+    state.pxPerM = null; state.scaleLine = null;
+    $("#dropzone").style.display = "none";
+    $("#pagenav").style.display = state.numPages>1 ? "flex" : "none";
+    updatePageLabel(); updateScaleUI(); renderGroups(); renderShapes();
+    await ensurePage(state.page);
+    fitView();
+    hint("Set the scale: pick the ruler tool and click two points of a known distance.");
+  }catch(err){ console.error(err); alert("Could not open that file. Try another PDF or image."); }
+}
+
+async function ensurePage(n){
+  if(state.pageCache[n]) return state.pageCache[n];
+  const c = document.createElement("canvas");
+  if(state.doc.type === "image"){
+    const img = state.doc.img;
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    c.getContext("2d").drawImage(img,0,0);
+  } else {
+    const page = await state.doc.pdf.getPage(n);
+    const v1 = page.getViewport({scale:1});
+    const rscale = Math.min(3, 3200/Math.max(v1.width,v1.height));
+    const vp = page.getViewport({scale:rscale});
+    c.width = vp.width; c.height = vp.height;
+    const g = c.getContext("2d");
+    g.fillStyle = "#fff"; g.fillRect(0,0,c.width,c.height);
+    await page.render({canvasContext:g, viewport:vp}).promise;
+  }
+  state.pageCache[n] = c;
+  return c;
+}
+
+async function gotoPage(n){
+  if(n<1 || n>state.numPages) return;
+  cancelDrawing(); state.sel = null;
+  state.page = n;
+  await ensurePage(n);
+  updatePageLabel(); fitView(); renderShapes();
+}
+function updatePageLabel(){ $("#pgLabel").textContent = `${state.page}/${state.numPages}`; }
+
+function fitView(){
+  const pc = state.pageCache[state.page]; if(!pc) return;
+  const r = stage.getBoundingClientRect();
+  const s = Math.min(r.width/pc.width, r.height/pc.height)*0.92;
+  state.view = {s, x:(r.width-pc.width*s)/2, y:(r.height-pc.height*s)/2};
+  draw(); hudZoom();
+}
+
+/* ---------- drawing ---------- */
+function draw(){
+  const dpr = devicePixelRatio||1, v = state.view;
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const pc = state.pageCache[state.page];
+  if(!pc) return;
+  ctx.setTransform(dpr*v.s,0,0,dpr*v.s,dpr*v.x,dpr*v.y);
+  ctx.imageSmoothingQuality = "high";
+  // paper shadow
+  ctx.fillStyle = "rgba(0,0,0,.35)";
+  ctx.fillRect(6/v.s,6/v.s,pc.width,pc.height);
+  ctx.drawImage(pc,0,0);
+
+  const lw = w => w/v.s;
+
+  // shapes on this page
+  for(const sh of state.shapes){
+    if(sh.page !== state.page) continue;
+    const g = groupOf(sh.groupId), seld = state.sel === sh.id;
+    ctx.beginPath();
+    sh.points.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+    ctx.closePath();
+    ctx.fillStyle = hexRGBA(g.color, seld?0.5:0.36);
+    ctx.fill();
+    ctx.lineWidth = lw(seld?2.6:1.8);
+    ctx.strokeStyle = seld ? "#4FC6A4" : g.color;
+    ctx.stroke();
+    // label
+    const a = areaM2(sh), c = centroid(sh.points);
+    const fs = 13/v.s;
+    ctx.font = `600 ${fs}px "IBM Plex Mono",monospace`;
+    ctx.textAlign = "center";
+    const t1 = sh.name, t2 = a!=null ? fmt2(a)+" m²" : "no scale";
+    ctx.lineWidth = lw(3); ctx.strokeStyle = "rgba(255,255,255,.85)";
+    ctx.strokeText(t1,c.x,c.y-fs*0.35); ctx.strokeText(t2,c.x,c.y+fs*0.85);
+    ctx.fillStyle = "#22282E";
+    ctx.fillText(t1,c.x,c.y-fs*0.35); ctx.fillText(t2,c.x,c.y+fs*0.85);
+    if(seld){
+      for(const p of sh.points){
+        ctx.beginPath(); ctx.rect(p.x-5/v.s,p.y-5/v.s,10/v.s,10/v.s);
+        ctx.fillStyle="#fff"; ctx.fill();
+        ctx.lineWidth=lw(1.6); ctx.strokeStyle="#4FC6A4"; ctx.stroke();
+      }
+    }
+  }
+
+  // scale reference line
+  const sl = state.scaleLine;
+  if(sl && sl.page === state.page){
+    ctx.beginPath(); ctx.moveTo(sl.p1.x,sl.p1.y); ctx.lineTo(sl.p2.x,sl.p2.y);
+    ctx.setLineDash([8/v.s,5/v.s]);
+    ctx.lineWidth = lw(2.2); ctx.strokeStyle = "#F2B33C"; ctx.stroke();
+    ctx.setLineDash([]);
+    for(const p of [sl.p1,sl.p2]){
+      ctx.beginPath(); ctx.arc(p.x,p.y,4/v.s,0,7);
+      ctx.fillStyle="#F2B33C"; ctx.fill();
+    }
+    const mid = {x:(sl.p1.x+sl.p2.x)/2, y:(sl.p1.y+sl.p2.y)/2}, fs=13/v.s;
+    ctx.font = `600 ${fs}px "IBM Plex Mono",monospace`; ctx.textAlign="center";
+    ctx.lineWidth=lw(3.4); ctx.strokeStyle="rgba(30,36,44,.9)";
+    ctx.strokeText(`${fmt2(sl.meters)} m`, mid.x, mid.y-8/v.s);
+    ctx.fillStyle="#F2B33C";
+    ctx.fillText(`${fmt2(sl.meters)} m`, mid.x, mid.y-8/v.s);
+  }
+
+  // scale tool: first point placed
+  if(state.tool==="scale" && state.scaleP1 && state.mouseImg){
+    ctx.beginPath(); ctx.moveTo(state.scaleP1.x,state.scaleP1.y); ctx.lineTo(state.mouseImg.x,state.mouseImg.y);
+    ctx.setLineDash([8/v.s,5/v.s]); ctx.lineWidth=lw(2); ctx.strokeStyle="#F2B33C"; ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // in-progress polygon
+  if(state.drawPts.length){
+    ctx.beginPath();
+    state.drawPts.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+    if(state.mouseImg) ctx.lineTo(state.mouseImg.x,state.mouseImg.y);
+    ctx.lineWidth = lw(1.8); ctx.strokeStyle = "#4FC6A4";
+    ctx.stroke();
+    if(state.drawPts.length>=2 && state.mouseImg){
+      ctx.closePath(); ctx.fillStyle="rgba(79,198,164,.18)"; ctx.fill();
+    }
+    state.drawPts.forEach((p,i)=>{
+      ctx.beginPath(); ctx.arc(p.x,p.y,(i===0?6:4)/v.s,0,7);
+      ctx.fillStyle = i===0 ? "#4FC6A4" : "#fff"; ctx.fill();
+      ctx.lineWidth=lw(1.4); ctx.strokeStyle="#1E242C"; ctx.stroke();
+    });
+  }
+
+  // rectangle preview
+  if(state.rectStart && state.rectNow){
+    const a=state.rectStart,b=state.rectNow;
+    ctx.beginPath(); ctx.rect(Math.min(a.x,b.x),Math.min(a.y,b.y),Math.abs(b.x-a.x),Math.abs(b.y-a.y));
+    ctx.fillStyle="rgba(79,198,164,.18)"; ctx.fill();
+    ctx.lineWidth=lw(1.8); ctx.strokeStyle="#4FC6A4"; ctx.stroke();
+  }
+}
+
+/* ---------- coordinates ---------- */
+function toImg(e){
+  const r = cv.getBoundingClientRect(), v = state.view;
+  return {x:(e.clientX-r.left-v.x)/v.s, y:(e.clientY-r.top-v.y)/v.s};
+}
+
+/* ---------- HUD ---------- */
+function hint(t){ $("#hudHint").textContent = t; }
+function hudZoom(){ $("#hudZoom").textContent = Math.round(state.view.s*100)+"%"; }
+function hudUpdate(){
+  $("#hudScale").textContent = state.pxPerM ? `1 m = ${state.pxPerM.toFixed(1)} px` : "—";
+  const p = state.mouseImg;
+  $("#hudPos").textContent = p ? (state.pxPerM
+    ? `${(p.x/state.pxPerM).toFixed(2)}, ${(p.y/state.pxPerM).toFixed(2)} m`
+    : `${Math.round(p.x)}, ${Math.round(p.y)} px`) : "—";
+  let live = "";
+  if(state.drawPts.length>=2 && state.mouseImg && state.pxPerM){
+    const a = shoelace([...state.drawPts,state.mouseImg])/(state.pxPerM**2);
+    live = `LIVE AREA ${fmt2(a)} m²`;
+  }
+  if(state.rectStart && state.rectNow && state.pxPerM){
+    const w=Math.abs(state.rectNow.x-state.rectStart.x)/state.pxPerM,
+          h=Math.abs(state.rectNow.y-state.rectStart.y)/state.pxPerM;
+    live = `LIVE ${fmt2(w)} × ${fmt2(h)} m = ${fmt2(w*h)} m²`;
+  }
+  if(state.tool==="scale" && state.scaleP1 && state.mouseImg){
+    live = `REF LINE ${dist(state.scaleP1,state.mouseImg).toFixed(1)} px`;
+  }
+  $("#hudLive").textContent = live;
+}
+
+/* ---------- tools ---------- */
+function setTool(t){
+  state.tool = t;
+  cancelDrawing();
+  document.querySelectorAll(".tool").forEach(b=>b.classList.toggle("active",b.dataset.tool===t));
+  stage.className = "tool-"+t;
+  const hints = {
+    select:"Click a shape to select it. Drag its handles to adjust. Del to remove.",
+    pan:"Drag to pan. Trackpad: two-finger scroll pans, pinch zooms. Mouse: wheel zooms.",
+    scale:"Click two points of a known distance (e.g. a dimension line or door width).",
+    polygon:"Click to place points. Click the first point or press Enter to close. Esc cancels.",
+    rect:"Click and drag to shade a rectangular area."
+  };
+  hint(hints[t]||"");
+  draw();
+}
+function cancelDrawing(){
+  state.drawPts = []; state.rectStart = null; state.rectNow = null; state.scaleP1 = null;
+  draw(); hudUpdate();
+}
+
+/* ---------- shape creation ---------- */
+function addShape(points){
+  const sh = {
+    id: Date.now()+Math.random(),
+    name: "Shape "+(state.shapeSeq++),
+    page: state.page,
+    points,
+    groupId: state.lastGroup
+  };
+  state.shapes.push(sh);
+  state.sel = sh.id;
+  renderShapes(); renderGroups(); draw();
+  if(!state.pxPerM) hint("Shape added — set the scale (ruler tool) to see its area in m².");
+}
+function closePolygon(){
+  if(state.drawPts.length>=3) addShape(state.drawPts.slice());
+  state.drawPts = []; draw(); hudUpdate();
+}
+
+/* ---------- pointer events ---------- */
+let downBtn = -1;
+cv.addEventListener("pointerdown", e=>{
+  if(!state.doc) return;
+  downBtn = e.button;
+  const p = toImg(e);
+  const panMode = state.tool==="pan" || state.spaceDown || e.button===1;
+  if(panMode){
+    state.panning = true; state.panStart = {mx:e.clientX,my:e.clientY,vx:state.view.x,vy:state.view.y};
+    stage.classList.add("panning"); cv.setPointerCapture(e.pointerId);
+    return;
+  }
+  if(e.button!==0) return;
+
+  if(state.tool==="scale"){
+    if(!state.scaleP1){ state.scaleP1 = p; }
+    else {
+      const px = dist(state.scaleP1,p);
+      if(px<2){ return; }
+      pendingScale = {p1:state.scaleP1,p2:p,px};
+      $("#scalePx").textContent = px.toFixed(1);
+      $("#scaleMeters").value = "";
+      $("#scaleModal").classList.add("open");
+      setTimeout(()=>$("#scaleMeters").focus(),50);
+      state.scaleP1 = null;
+    }
+    draw(); return;
+  }
+  if(state.tool==="polygon"){
+    if(state.drawPts.length>=3 && dist(p,state.drawPts[0]) < 10/state.view.s){ closePolygon(); return; }
+    state.drawPts.push(p); draw(); return;
+  }
+  if(state.tool==="rect"){
+    state.rectStart = p; state.rectNow = p; cv.setPointerCapture(e.pointerId); draw(); return;
+  }
+  if(state.tool==="select"){
+    // vertex handle first
+    const selSh = state.shapes.find(s=>s.id===state.sel);
+    if(selSh && selSh.page===state.page){
+      const hi = selSh.points.findIndex(pt=>dist(pt,p) < 8/state.view.s);
+      if(hi>=0){ state.dragV = {sh:selSh, idx:hi}; cv.setPointerCapture(e.pointerId); return; }
+    }
+    // shape body
+    const hit = [...state.shapes].reverse().find(s=>s.page===state.page && inPoly(p,s.points));
+    if(hit){
+      state.sel = hit.id;
+      state.dragShape = {sh:hit, last:p};
+      cv.setPointerCapture(e.pointerId);
+    } else state.sel = null;
+    renderShapes(); draw();
+  }
+});
+
+cv.addEventListener("pointermove", e=>{
+  state.mouseImg = state.doc ? toImg(e) : null;
+  if(state.panning){
+    state.view.x = state.panStart.vx + (e.clientX-state.panStart.mx);
+    state.view.y = state.panStart.vy + (e.clientY-state.panStart.my);
+    draw();
+  } else if(state.dragV){
+    state.dragV.sh.points[state.dragV.idx] = state.mouseImg;
+    renderShapesAreasOnly(); draw();
+  } else if(state.dragShape){
+    const d = state.dragShape, dx = state.mouseImg.x-d.last.x, dy = state.mouseImg.y-d.last.y;
+    d.sh.points = d.sh.points.map(pt=>({x:pt.x+dx,y:pt.y+dy}));
+    d.last = state.mouseImg;
+    draw();
+  } else if(state.rectStart){
+    state.rectNow = state.mouseImg; draw();
+  } else if(state.drawPts.length || (state.tool==="scale"&&state.scaleP1)){
+    draw();
+  }
+  hudUpdate();
+});
+
+cv.addEventListener("pointerup", e=>{
+  if(state.panning){ state.panning = false; stage.classList.remove("panning"); }
+  if(state.dragV){ state.dragV = null; renderShapes(); renderGroups(); }
+  if(state.dragShape){ state.dragShape = null; }
+  if(state.rectStart && state.rectNow){
+    const a = state.rectStart, b = state.rectNow;
+    if(Math.abs(b.x-a.x)>3 && Math.abs(b.y-a.y)>3){
+      addShape([{x:a.x,y:a.y},{x:b.x,y:a.y},{x:b.x,y:b.y},{x:a.x,y:b.y}]);
+    }
+    state.rectStart = state.rectNow = null; draw();
+  }
+});
+
+cv.addEventListener("dblclick", e=>{
+  if(state.tool==="polygon" && state.drawPts.length>=3){
+    state.drawPts.pop(); // remove point added by the 2nd click of dblclick
+    if(state.drawPts.length>=3) closePolygon(); else { state.drawPts=[]; draw(); }
+  }
+});
+
+cv.addEventListener("wheel", e=>{
+  if(!state.doc) return;
+  e.preventDefault();
+  const r = cv.getBoundingClientRect(), v = state.view;
+
+  const zoomAt = f=>{
+    const sx = e.clientX-r.left, sy = e.clientY-r.top;
+    const ns = Math.min(40, Math.max(0.02, v.s*f));
+    v.x = sx - (sx-v.x)*(ns/v.s);
+    v.y = sy - (sy-v.y)*(ns/v.s);
+    v.s = ns;
+  };
+
+  if(e.ctrlKey || e.metaKey){
+    // trackpad pinch (browsers report it as ctrl+wheel) or Ctrl/Cmd+scroll
+    zoomAt(Math.exp(-e.deltaY*0.012));
+  } else {
+    // classic mouse wheel: notchy deltas, no horizontal component → keep zooming
+    const mouseWheel = e.deltaMode !== 0 ||
+      (e.deltaX === 0 && Math.abs(e.deltaY) >= 100 && Number.isInteger(e.deltaY) && e.deltaY % 20 === 0);
+    if(mouseWheel){
+      zoomAt(e.deltaY < 0 ? 1.12 : 1/1.12);
+    } else {
+      // trackpad two-finger scroll → pan the layout
+      v.x -= e.deltaX;
+      v.y -= e.deltaY;
+    }
+  }
+  draw(); hudZoom(); hudUpdate();
+},{passive:false});
+
+/* ---------- keyboard ---------- */
+addEventListener("keydown", e=>{
+  if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT") return;
+  if(e.code==="Space"){ state.spaceDown = true; stage.classList.add("panning"); e.preventDefault(); return; }
+  const k = e.key.toLowerCase();
+  if(k==="v") setTool("select");
+  if(k==="h") setTool("pan");
+  if(k==="s") setTool("scale");
+  if(k==="p") setTool("polygon");
+  if(k==="r") setTool("rect");
+  if(e.key==="Enter" && state.tool==="polygon") closePolygon();
+  if(e.key==="Escape"){ cancelDrawing(); $("#scaleModal").classList.remove("open"); }
+  if((e.key==="Delete"||e.key==="Backspace") && state.sel){
+    state.shapes = state.shapes.filter(s=>s.id!==state.sel);
+    state.sel = null; renderShapes(); renderGroups(); draw();
+  }
+  if((e.ctrlKey||e.metaKey) && k==="z" && state.drawPts.length){ state.drawPts.pop(); draw(); e.preventDefault(); }
+});
+addEventListener("keyup", e=>{
+  if(e.code==="Space"){ state.spaceDown=false; if(!state.panning) stage.classList.remove("panning"); }
+});
+
+/* ---------- scale modal ---------- */
+let pendingScale = null;
+$("#scaleOk").onclick = ()=>{
+  const m = parseFloat($("#scaleMeters").value);
+  if(!pendingScale || !m || m<=0){ $("#scaleMeters").focus(); return; }
+  state.pxPerM = pendingScale.px/m;
+  state.scaleLine = {p1:pendingScale.p1, p2:pendingScale.p2, meters:m, page:state.page};
+  $("#scaleModal").classList.remove("open");
+  pendingScale = null;
+  updateScaleUI(); renderGroups(); renderShapes(); draw(); hudUpdate();
+  setTool("polygon");
+  hint("Scale set. Shade areas with the polygon or rectangle tool.");
+};
+$("#scaleCancel").onclick = ()=>{ pendingScale=null; $("#scaleModal").classList.remove("open"); draw(); };
+$("#scaleMeters").addEventListener("keydown",e=>{ if(e.key==="Enter") $("#scaleOk").click(); });
+
+function updateScaleUI(){
+  const el = $("#scaleStatus");
+  if(state.pxPerM){
+    el.classList.add("set");
+    el.innerHTML = `1 m = ${state.pxPerM.toFixed(2)} px<br>ref line: ${fmt2(state.scaleLine.meters)} m (page ${state.scaleLine.page})`;
+  } else {
+    el.classList.remove("set");
+    el.textContent = "Not set — pick the ruler tool, click two points of a known distance.";
+  }
+  hudUpdate();
+}
+
+/* ---------- sidebar: groups ---------- */
+function renderGroups(){
+  const wrap = $("#groupList"); wrap.innerHTML = "";
+  for(const g of state.groups){
+    const shapes = state.shapes.filter(s=>s.groupId===g.id);
+    const tot = state.pxPerM ? shapes.reduce((a,s)=>a+areaM2(s),0) : null;
+    const el = document.createElement("div");
+    el.className = "group-item";
+    el.innerHTML = `
+      <div class="group-head">
+        <input type="color" value="${g.color}">
+        <input type="text" value="${g.name.replace(/"/g,"&quot;")}">
+        <span class="group-total">${tot!=null?fmt2(tot)+" m²":shapes.length+" shp"}</span>
+        <button class="group-del" title="Delete group">×</button>
+      </div>`;
+    const [colorIn,nameIn] = el.querySelectorAll("input");
+    colorIn.oninput = ()=>{ g.color = colorIn.value; renderShapes(); draw(); };
+    nameIn.onchange = ()=>{ g.name = nameIn.value.trim()||g.name; renderShapes(); draw(); };
+    el.querySelector(".group-del").onclick = ()=>{
+      if(state.groups.length===1){ alert("Keep at least one group."); return; }
+      const fallback = state.groups.find(x=>x.id!==g.id).id;
+      state.shapes.forEach(s=>{ if(s.groupId===g.id) s.groupId = fallback; });
+      state.groups = state.groups.filter(x=>x.id!==g.id);
+      if(state.lastGroup===g.id) state.lastGroup = fallback;
+      renderGroups(); renderShapes(); draw();
+    };
+    wrap.appendChild(el);
+  }
+}
+$("#addGroup").onclick = ()=>{
+  const g = {id:state.groupSeq++, name:"Area "+(state.groups.length+1), color:PALETTE[(state.groups.length)%PALETTE.length]};
+  state.groups.push(g); state.lastGroup = g.id;
+  renderGroups(); renderShapes();
+};
+
+/* ---------- sidebar: shapes ---------- */
+function renderShapes(){
+  const wrap = $("#shapeList"); wrap.innerHTML = "";
+  if(!state.shapes.length){
+    wrap.innerHTML = `<div class="empty-note">No shapes yet. Use the polygon or rectangle tool to shade an area.</div>`;
+    return;
+  }
+  for(const sh of state.shapes){
+    const g = groupOf(sh.groupId), a = areaM2(sh);
+    const el = document.createElement("div");
+    el.className = "shape-item"+(state.sel===sh.id?" sel":"");
+    el.innerHTML = `
+      <span class="shape-dot" style="background:${g.color}"></span>
+      <span class="shape-name"><input type="text" value="${sh.name.replace(/"/g,"&quot;")}" title="Click to rename">${sh.page!==state.page?`<span class="shape-page">p${sh.page}</span>`:""}</span>
+      <span class="shape-area">${a!=null?fmt2(a)+" m²":"—"}</span>
+      <select title="Group">${state.groups.map(x=>`<option value="${x.id}" ${x.id===sh.groupId?"selected":""}>${x.name}</option>`).join("")}</select>
+      <button class="shape-del" title="Delete">×</button>`;
+    el.onclick = async e=>{
+      if(["SELECT","BUTTON","INPUT"].includes(e.target.tagName)) return;
+      if(sh.page!==state.page) await gotoPage(sh.page);
+      state.sel = sh.id; renderShapes(); draw();
+    };
+    const nameIn = el.querySelector(".shape-name input");
+    nameIn.onfocus = ()=>{ state.sel = sh.id; draw(); };
+    nameIn.onchange = ()=>{ sh.name = nameIn.value.trim() || sh.name; nameIn.value = sh.name; draw(); };
+    nameIn.addEventListener("keydown", e=>{ if(e.key==="Enter") nameIn.blur(); });
+    el.querySelector("select").onchange = e=>{
+      sh.groupId = +e.target.value; state.lastGroup = sh.groupId;
+      renderGroups(); renderShapes(); draw();
+    };
+    el.querySelector(".shape-del").onclick = ()=>{
+      state.shapes = state.shapes.filter(x=>x.id!==sh.id);
+      if(state.sel===sh.id) state.sel=null;
+      renderShapes(); renderGroups(); draw();
+    };
+    wrap.appendChild(el);
+  }
+}
+function renderShapesAreasOnly(){ /* light refresh while dragging */ renderGroups(); }
+
+/* ---------- file open / drop ---------- */
+$("#btnOpen").onclick = ()=>$("#fileInput").click();
+$("#btnOpen2").onclick = ()=>$("#fileInput").click();
+$("#fileInput").onchange = e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); e.target.value=""; };
+["dragover","dragenter"].forEach(ev=>stage.addEventListener(ev,e=>{e.preventDefault();$("#dzBox")?.classList.add("drag");}));
+["dragleave","drop"].forEach(ev=>stage.addEventListener(ev,e=>{e.preventDefault();$("#dzBox")?.classList.remove("drag");}));
+stage.addEventListener("drop", e=>{ const f=e.dataTransfer.files[0]; if(f) loadFile(f); });
+
+$("#btnFit").onclick = fitView;
+$("#pgPrev").onclick = ()=>gotoPage(state.page-1);
+$("#pgNext").onclick = ()=>gotoPage(state.page+1);
+document.querySelectorAll(".tool").forEach(b=>b.onclick = ()=>setTool(b.dataset.tool));
+
+/* ---------- summary ---------- */
+async function snapshotPage(n){
+  const base = await ensurePage(n);
+  const c = document.createElement("canvas");
+  c.width = base.width; c.height = base.height;
+  const g = c.getContext("2d");
+  g.drawImage(base,0,0);
+  const fs = Math.max(14, base.width/85);
+  for(const sh of state.shapes.filter(s=>s.page===n)){
+    const gr = groupOf(sh.groupId);
+    g.beginPath();
+    sh.points.forEach((p,i)=> i?g.lineTo(p.x,p.y):g.moveTo(p.x,p.y));
+    g.closePath();
+    g.fillStyle = hexRGBA(gr.color,.4); g.fill();
+    g.lineWidth = Math.max(2, base.width/1400); g.strokeStyle = gr.color; g.stroke();
+    const cn = centroid(sh.points), a = areaM2(sh);
+    g.font = `600 ${fs}px "IBM Plex Mono",monospace`;
+    g.textAlign = "center";
+    g.lineWidth = fs/4; g.strokeStyle = "rgba(255,255,255,.9)";
+    g.strokeText(sh.name, cn.x, cn.y-fs*0.3);
+    g.strokeText(fmt2(a)+" m²", cn.x, cn.y+fs*0.9);
+    g.fillStyle = "#22282E";
+    g.fillText(sh.name, cn.x, cn.y-fs*0.3);
+    g.fillText(fmt2(a)+" m²", cn.x, cn.y+fs*0.9);
+  }
+  return c.toDataURL("image/jpeg",0.9);
+}
+
+$("#btnSummary").onclick = async ()=>{
+  if(!state.doc){ alert("Open a floor plan first."); return; }
+  if(!state.pxPerM){ alert("Set the scale first so areas can be calculated in m²."); return; }
+  if(!state.shapes.length){ alert("Add at least one shape before generating a summary."); return; }
+  const proj = $("#projName").value.trim() || "Untitled project";
+  const by = $("#calcBy").value.trim() || "—";
+  const now = new Date();
+  const dt = now.toLocaleString("en-GB",{day:"numeric",month:"long",year:"numeric",hour:"2-digit",minute:"2-digit"});
+  const pages = [...new Set(state.shapes.map(s=>s.page))].sort((a,b)=>a-b);
+  const snaps = [];
+  for(const p of pages) snaps.push({p, url: await snapshotPage(p)});
+
+  const rows = state.groups.map(g=>{
+    const shp = state.shapes.filter(s=>s.groupId===g.id);
+    if(!shp.length) return "";
+    const tot = shp.reduce((a,s)=>a+areaM2(s),0);
+    return `<tr><td><span class="swb" style="background:${g.color}"></span>${g.name}</td>
+      <td>${shp.length}</td><td class="num">${fmt2(tot)} m²</td></tr>`;
+  }).join("");
+  const grand = state.shapes.reduce((a,s)=>a+areaM2(s),0);
+
+  const detail = state.shapes.map(s=>{
+    const g = groupOf(s.groupId);
+    return `<tr><td>${s.name}</td><td><span class="swb" style="background:${g.color}"></span>${g.name}</td>
+      <td>p.${s.page}</td><td class="num">${fmt2(areaM2(s))} m²</td></tr>`;
+  }).join("");
+
+  $("#sheet").innerHTML = `
+    <div class="eyebrow">Area calculation summary</div>
+    <h1>${proj}</h1>
+    <div class="meta-grid">
+      <div class="m"><label>Calculated by</label><div>${by}</div></div>
+      <div class="m"><label>Date &amp; time created</label><div>${dt}</div></div>
+      <div class="m"><label>Scale reference</label><div>${fmt2(state.scaleLine.meters)} m = ${state.scaleLine ? dist(state.scaleLine.p1,state.scaleLine.p2).toFixed(1) : ""} px</div></div>
+    </div>
+    <h2>Marked-up plan</h2>
+    ${snaps.map(s=>`<img class="snap" src="${s.url}"><div class="snap-cap">Page ${s.p} of ${state.numPages}</div>`).join("")}
+    <h2>Area per group</h2>
+    <table class="sumtab">
+      <thead><tr><th>Group</th><th>Shapes</th><th>Area</th></tr></thead>
+      <tbody>${rows}
+        <tr class="total"><td>Total</td><td>${state.shapes.length}</td><td class="num">${fmt2(grand)} m²</td></tr>
+      </tbody>
+    </table>
+    <h2>Shape detail</h2>
+    <table class="sumtab">
+      <thead><tr><th>Shape</th><th>Group</th><th>Page</th><th>Area</th></tr></thead>
+      <tbody>${detail}</tbody>
+    </table>
+    <footer><span>PlanMeasure · Kevin Award Armeldo · kevin.armeldo@gmail.com</span><span>${dt}</span></footer>`;
+  $("#summaryWrap").classList.add("open");
+};
+$("#sumBack").onclick = ()=>$("#summaryWrap").classList.remove("open");
+$("#sumPrint").onclick = ()=>window.print();
+
+/* ---------- init ---------- */
+renderGroups(); renderShapes(); resize();
+</script>
+</body>
+</html>
