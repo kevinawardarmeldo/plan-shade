@@ -272,7 +272,7 @@ const state = {
   groups:[{id:1,name:"Area 1",color:PALETTE[0]}],
   shapes:[],
   drawPts:[], rectStart:null, rectNow:null, scaleP1:null,
-  sel:null, dragV:null, dragShape:null,
+  sel:null, dragV:null, dragShape:null, dragE:null,
   panning:false, panStart:null, spaceDown:false,
   mouseImg:null, mouseScr:null,
   shapeSeq:1, groupSeq:2, lastGroup:1
@@ -285,7 +285,41 @@ const dist = (a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 function shoelace(pts){let s=0;for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];s+=a.x*b.y-b.x*a.y;}return Math.abs(s)/2;}
 function centroid(pts){let a=0,cx=0,cy=0;for(let i=0;i<pts.length;i++){const p=pts[i],q=pts[(i+1)%pts.length];const c=p.x*q.y-q.x*p.y;a+=c;cx+=(p.x+q.x)*c;cy+=(p.y+q.y)*c;}if(Math.abs(a)<1e-9){return pts.reduce((m,p)=>({x:m.x+p.x/pts.length,y:m.y+p.y/pts.length}),{x:0,y:0});}a*=.5;return{x:cx/(6*a),y:cy/(6*a)};}
 function inPoly(p,pts){let ins=false;for(let i=0,j=pts.length-1;i<pts.length;j=i++){if((pts[i].y>p.y)!==(pts[j].y>p.y)&&p.x<(pts[j].x-pts[i].x)*(p.y-pts[i].y)/(pts[j].y-pts[i].y)+pts[i].x)ins=!ins;}return ins;}
-const areaM2 = sh => state.pxPerM ? shoelace(sh.points)/(state.pxPerM**2) : null;
+
+/* --- curved edges (per-edge "bulge" = signed sagitta of the arc midpoint) --- */
+function edgeGeo(a,b,h){
+  const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
+  const dx=b.x-a.x, dy=b.y-a.y, L=Math.hypot(dx,dy)||1;
+  const nx=-dy/L, ny=dx/L;                      // unit normal of the chord
+  const M={x:mx+nx*h, y:my+ny*h};               // point the curve passes through
+  return {mid:{x:mx,y:my}, n:{x:nx,y:ny}, M, C:{x:2*M.x-mx, y:2*M.y-my}}; // C = quadratic ctrl pt
+}
+function tracePath(g, sh){
+  const pts=sh.points, n=pts.length;
+  g.moveTo(pts[0].x,pts[0].y);
+  for(let i=0;i<n;i++){
+    const a=pts[i], b=pts[(i+1)%n], h=(sh.bulges&&sh.bulges[i])||0;
+    if(!h) g.lineTo(b.x,b.y);
+    else { const {C}=edgeGeo(a,b,h); g.quadraticCurveTo(C.x,C.y,b.x,b.y); }
+  }
+  g.closePath();
+}
+function flat(sh){ // flatten curved edges into a polygon for area / hit tests
+  const pts=sh.points, n=pts.length, out=[], SEG=18;
+  for(let i=0;i<n;i++){
+    const a=pts[i], b=pts[(i+1)%n], h=(sh.bulges&&sh.bulges[i])||0;
+    out.push(a);
+    if(h){
+      const {C}=edgeGeo(a,b,h);
+      for(let t=1;t<SEG;t++){
+        const u=t/SEG, v=1-u;
+        out.push({x:v*v*a.x+2*v*u*C.x+u*u*b.x, y:v*v*a.y+2*v*u*C.y+u*u*b.y});
+      }
+    }
+  }
+  return out;
+}
+const areaM2 = sh => state.pxPerM ? shoelace(flat(sh))/(state.pxPerM**2) : null;
 const groupOf = id => state.groups.find(g=>g.id===id) || state.groups[0];
 
 /* ---------- canvas sizing ---------- */
@@ -382,15 +416,14 @@ function draw(){
     if(sh.page !== state.page) continue;
     const g = groupOf(sh.groupId), seld = state.sel === sh.id;
     ctx.beginPath();
-    sh.points.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
-    ctx.closePath();
+    tracePath(ctx, sh);
     ctx.fillStyle = hexRGBA(g.color, seld?0.5:0.36);
     ctx.fill();
     ctx.lineWidth = lw(seld?2.6:1.8);
     ctx.strokeStyle = seld ? "#4FC6A4" : g.color;
     ctx.stroke();
     // label
-    const a = areaM2(sh), c = centroid(sh.points);
+    const a = areaM2(sh), c = centroid(flat(sh));
     const fs = 13/v.s;
     ctx.font = `600 ${fs}px "IBM Plex Mono",monospace`;
     ctx.textAlign = "center";
@@ -400,6 +433,16 @@ function draw(){
     ctx.fillStyle = "#22282E";
     ctx.fillText(t1,c.x,c.y-fs*0.35); ctx.fillText(t2,c.x,c.y+fs*0.85);
     if(seld){
+      // edge midpoint handles — drag to bend the edge into an arc
+      const n = sh.points.length;
+      for(let i=0;i<n;i++){
+        const h = (sh.bulges&&sh.bulges[i])||0;
+        const {M} = edgeGeo(sh.points[i], sh.points[(i+1)%n], h);
+        ctx.beginPath(); ctx.arc(M.x, M.y, 4.5/v.s, 0, 7);
+        ctx.fillStyle = h ? "#F2B33C" : "rgba(255,255,255,.9)"; ctx.fill();
+        ctx.lineWidth = lw(1.6); ctx.strokeStyle = h ? "#8A5F0E" : "#4FC6A4"; ctx.stroke();
+      }
+      // vertex handles
       for(const p of sh.points){
         ctx.beginPath(); ctx.rect(p.x-5/v.s,p.y-5/v.s,10/v.s,10/v.s);
         ctx.fillStyle="#fff"; ctx.fill();
@@ -497,7 +540,7 @@ function setTool(t){
   document.querySelectorAll(".tool").forEach(b=>b.classList.toggle("active",b.dataset.tool===t));
   stage.className = "tool-"+t;
   const hints = {
-    select:"Click a shape to select it. Drag its handles to adjust. Del to remove.",
+    select:"Click a shape to select. Drag corner handles to move points; drag the round mid-edge handles to bend a line into an arc. Del removes.",
     pan:"Drag to pan. Trackpad: two-finger scroll pans, pinch zooms. Mouse: wheel zooms.",
     scale:"Click two points of a known distance (e.g. a dimension line or door width).",
     polygon:"Click to place points. Click the first point or press Enter to close. Esc cancels.",
@@ -518,6 +561,7 @@ function addShape(points){
     name: "Shape "+(state.shapeSeq++),
     page: state.page,
     points,
+    bulges: new Array(points.length).fill(0),
     groupId: state.lastGroup
   };
   state.shapes.push(sh);
@@ -571,9 +615,20 @@ cv.addEventListener("pointerdown", e=>{
     if(selSh && selSh.page===state.page){
       const hi = selSh.points.findIndex(pt=>dist(pt,p) < 8/state.view.s);
       if(hi>=0){ state.dragV = {sh:selSh, idx:hi}; cv.setPointerCapture(e.pointerId); return; }
+      // edge midpoint handle → bend edge into an arc
+      const n = selSh.points.length;
+      if(!selSh.bulges) selSh.bulges = new Array(n).fill(0);
+      for(let i=0;i<n;i++){
+        const {M} = edgeGeo(selSh.points[i], selSh.points[(i+1)%n], selSh.bulges[i]||0);
+        if(dist(M,p) < 8/state.view.s){
+          state.dragE = {sh:selSh, idx:i};
+          cv.setPointerCapture(e.pointerId);
+          return;
+        }
+      }
     }
     // shape body
-    const hit = [...state.shapes].reverse().find(s=>s.page===state.page && inPoly(p,s.points));
+    const hit = [...state.shapes].reverse().find(s=>s.page===state.page && inPoly(p,flat(s)));
     if(hit){
       state.sel = hit.id;
       state.dragShape = {sh:hit, last:p};
@@ -592,6 +647,13 @@ cv.addEventListener("pointermove", e=>{
   } else if(state.dragV){
     state.dragV.sh.points[state.dragV.idx] = state.mouseImg;
     renderShapesAreasOnly(); draw();
+  } else if(state.dragE){
+    const d = state.dragE, a = d.sh.points[d.idx], b = d.sh.points[(d.idx+1)%d.sh.points.length];
+    const {mid,n} = edgeGeo(a,b,0);
+    let h = (state.mouseImg.x-mid.x)*n.x + (state.mouseImg.y-mid.y)*n.y; // signed sagitta
+    if(Math.abs(h) < 4/state.view.s) h = 0;  // snap back to a straight line
+    d.sh.bulges[d.idx] = h;
+    renderShapesAreasOnly(); draw();
   } else if(state.dragShape){
     const d = state.dragShape, dx = state.mouseImg.x-d.last.x, dy = state.mouseImg.y-d.last.y;
     d.sh.points = d.sh.points.map(pt=>({x:pt.x+dx,y:pt.y+dy}));
@@ -608,6 +670,7 @@ cv.addEventListener("pointermove", e=>{
 cv.addEventListener("pointerup", e=>{
   if(state.panning){ state.panning = false; stage.classList.remove("panning"); }
   if(state.dragV){ state.dragV = null; renderShapes(); renderGroups(); }
+  if(state.dragE){ state.dragE = null; renderShapes(); renderGroups(); }
   if(state.dragShape){ state.dragShape = null; }
   if(state.rectStart && state.rectNow){
     const a = state.rectStart, b = state.rectNow;
@@ -805,11 +868,10 @@ async function snapshotPage(n){
   for(const sh of state.shapes.filter(s=>s.page===n)){
     const gr = groupOf(sh.groupId);
     g.beginPath();
-    sh.points.forEach((p,i)=> i?g.lineTo(p.x,p.y):g.moveTo(p.x,p.y));
-    g.closePath();
+    tracePath(g, sh);
     g.fillStyle = hexRGBA(gr.color,.4); g.fill();
     g.lineWidth = Math.max(2, base.width/1400); g.strokeStyle = gr.color; g.stroke();
-    const cn = centroid(sh.points), a = areaM2(sh);
+    const cn = centroid(flat(sh)), a = areaM2(sh);
     g.font = `600 ${fs}px "IBM Plex Mono",monospace`;
     g.textAlign = "center";
     g.lineWidth = fs/4; g.strokeStyle = "rgba(255,255,255,.9)";
